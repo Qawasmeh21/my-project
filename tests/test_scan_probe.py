@@ -341,6 +341,73 @@ print("      بلا مِسبار %.1f م.ث · به %.1f م.ث ⇒ %.1f ميكر
 check("الكلفةُ دون 50 ميكروثانية للنداء", per_call < 50,
       "%.1f" % per_call)
 
+# ── ⑪ المشتبَهُ الثالث: _mtf_card_fields ────────────────────────────────
+print("\n⑪ _mtf_card_fields — تُلَفّ إن وُجدت، وتُفرَز بموضع النداء")
+mod = build(plan)
+card_calls = []
+
+
+def _mtf_card_fields(ticker):
+    card_calls.append(ticker)
+    time.sleep(0.001)
+    return {"ticker": ticker, "mtf_story": "…"}
+
+
+mod._mtf_card_fields = _mtf_card_fields
+
+
+class CardScanner(_BaseScanner):
+    def _scan_one(self, ticker):
+        self.ex.fetch_ohlcv(ticker, "1h", 200)
+        mod._mtf_card_fields(ticker)              # داخل المسح
+        return {"ticker": ticker}
+
+
+mod.TechnicalScanner = CardScanner
+lines = []
+scan_probe.install(mod, log=lines.append)
+check("يُعلِن أنّه وجدها",
+      not any("لم أجد _mtf_card_fields" in L for L in lines))
+sc = mod.TechnicalScanner(mod.exchange, mod.plan)
+for t in tickers:
+    sc._scan_one(t)                               # 10 داخل المسح
+for t in tickers[:3]:
+    mod._mtf_card_fields(t)                       # 3 بين الدالّتين
+
+
+def panel():
+    for t in tickers[:2]:
+        mod._mtf_card_fields(t)                   # 2 من خيط لوحة
+
+
+pth = threading.Thread(target=panel)
+pth.start()
+pth.join(timeout=5)
+mod.check_position_reversals()
+cl = field(lines, "_mtf_card_fields")
+check("عدُّها الكلّيُّ 15", "15 نداءً" in cl, cl)
+check("داخلَ المسح 10", "داخل المسح 10" in cl, cl)
+check("وبين الدالّتين 3", "بين الدالّتين 3" in cl, cl)
+check("ومن خيوطٍ أخرى 2", "خيوطٌ أخرى 2" in cl, cl)
+check("والنداءاتُ الفعليّةُ 15", len(card_calls) == 15, str(len(card_calls)))
+scan_probe.uninstall(mod)
+check("وتعود كما كانت", mod._mtf_card_fields is _mtf_card_fields)
+check("ولا وسمَ باقياً",
+      not getattr(mod._mtf_card_fields, scan_probe._MARK, False))
+
+print("\n⑫ وحدةٌ بلا _mtf_card_fields — يُعلِن أنّ الفجوةَ تبقى بلا اسم")
+mod = build(plan)
+lines = []
+scan_probe.install(mod, log=lines.append)
+check("يُعلِن غيابَها صراحةً",
+      any("لم أجد _mtf_card_fields" in L for L in lines))
+batch(mod, tickers)
+check("ولا سطرَ بطاقةٍ في الإخراج",
+      not any("_mtf_card_fields" in L for L in lines if "إجمالاً" not in L
+              and "لم أجد" not in L))
+scan_probe.uninstall(mod)
+check("ولا صفةَ بطاقةٍ مخلَّفة", not hasattr(mod, "_mtf_card_fields"))
+
 # ── الحصيلة ────────────────────────────────────────────────────────────
 print("\n" + "=" * 66)
 print("الحصيلة: %d/%d" % (len(PASSED), len(PASSED) + len(FAILED)))

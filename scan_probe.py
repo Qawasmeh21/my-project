@@ -57,6 +57,9 @@ __all__ = ["install", "uninstall", "installed"]
 #: وسمٌ يُوضَع على كلّ دالّةٍ ملفوفة — به يُكتشَف ترقيعٌ سابقٌ فُقدت أصولُه.
 _MARK = "__scan_probe_wrapper__"
 
+#: المشتبَهُ الثالث — يُلَفّ إن وُجد على الوحدة أو على الصنف.
+_CARD = "_mtf_card_fields"
+
 #: سقفُ العملات المخزَّنة في دفعةٍ واحدة. يُتجاوَز فقط إن لم يُنادَ
 #: `check_position_reversals` — وحينها الحدودُ مشكوكٌ فيها أصلاً.
 _MAX_COINS = 500
@@ -71,7 +74,9 @@ def _reset(cold=False, seq=0):
     _S.clear()
     _S.update(t0=None, cold=cold, seq=seq, coins=[], spans=[], scan_s=0.0,
               fetch_n=0, fetch_s=0.0, other_n=0, other_s=0.0,
-              threads=set(), in_cpr=False, cpr_thread=None, dropped=0)
+              threads=set(), in_cpr=False, cpr_thread=None, dropped=0,
+              card_n=0, card_s=0.0, card_in_n=0, card_in_s=0.0,
+              card_gap_n=0, card_gap_s=0.0, card_oth_n=0, card_oth_s=0.0)
 
 
 _reset(cold=True)
@@ -239,6 +244,47 @@ def install(mod, log=None, strict=False):
     mod.check_position_reversals = check_position_reversals
     _ORIG["mod"] = mod
 
+    # ── ④ المشتبَهُ الثالث — بطاقةُ MTF، إن وُجدت ─────────────────────
+    # تسليمُ 2026-09-11 § د يقيسها 11.6 ث/نداء، و§ ٣‑أ يصحّح مُضاعِفَها:
+    # لكلّ **مرشَّح** (35) وكلّ **مؤجَّلٍ ناضج** (21) = 56 ⇒ ~10.8 دقيقة.
+    # وبلا لفِّها تسقط كلُّها في سطر «ما بين الدالّتين» بلا اسم.
+    card, card_on = getattr(mod, _CARD, None), "mod"
+    if card is None:
+        card, card_on = getattr(cls, _CARD, None), "cls"
+    if card is None or getattr(card, _MARK, False):
+        _ORIG["card_on"] = None
+        log("📊 مِسبار الدفعة: لم أجد %s — فزمنُها (إن وُجدت) يبقى داخل "
+            "سطر «ما بين الدالّتين» بلا اسم." % _CARD)
+    else:
+        owner = mod if card_on == "mod" else cls
+        _ORIG["card_on"] = card_on
+        _ORIG["card"] = card
+        _ORIG["card_own"] = _CARD in vars(owner)
+
+        @functools.wraps(card)
+        def _mtf_card_fields(*a, **k):
+            t = time.perf_counter()
+            try:
+                return card(*a, **k)
+            finally:
+                d = time.perf_counter() - t
+                ident = threading.get_ident()
+                in_scan = getattr(_TL, "cur", None) is not None
+                with _LOCK:
+                    _S["card_n"] += 1
+                    _S["card_s"] += d
+                    if ident not in _S["threads"]:
+                        _S["card_oth_n"] += 1      # خيطُ لوحةٍ أو مراقب
+                        _S["card_oth_s"] += d
+                    elif in_scan:
+                        _S["card_in_n"] += 1       # داخل _scan_one
+                        _S["card_in_s"] += d
+                    else:
+                        _S["card_gap_n"] += 1      # ما بين الدالّتين
+                        _S["card_gap_s"] += d
+        setattr(_mtf_card_fields, _MARK, True)
+        setattr(owner, _CARD, _mtf_card_fields)
+
     log("📊 مِسبار الدفعة: رُكِّب — سطرُ قياسٍ عند نهاية كلّ دفعة. "
         "قراءةٌ محضة، والإزالةُ بحذف سطر التركيب.")
     return True
@@ -255,6 +301,9 @@ def _emit(rev_s, log):
         other_n, other_s = _S["other_n"], _S["other_s"]
         cold, seq, dropped = _S["cold"], _S["seq"], _S["dropped"]
         n_threads = len(_S["threads"])
+        card = (_S["card_n"], _S["card_s"], _S["card_in_n"], _S["card_in_s"],
+                _S["card_gap_n"], _S["card_gap_s"],
+                _S["card_oth_n"], _S["card_oth_s"])
         _reset(cold=False, seq=seq + 1)
 
     n = len(coins)
@@ -286,6 +335,15 @@ def _emit(rev_s, log):
         % (early, full, sorted(c[3] for c in coins)[n // 2]))
     log("📊   أبطأُ خمس: " + " · ".join(
         "%s %.1f ث/%d نداء" % (c[0], c[3], c[1]) for c in slow))
+    if _ORIG.get("card_on"):
+        c_n, c_s, i_n, i_s, g_n, g_s, o_n, o_s = card
+        if c_n:
+            log("📊   %s %d نداءً · %s = داخل المسح %d (%s) + بين الدالّتين "
+                "%d (%s) + خيوطٌ أخرى %d (%s)"
+                % (_CARD, c_n, _fmt(c_s), i_n, _fmt(i_s), g_n, _fmt(g_s),
+                   o_n, _fmt(o_s)))
+        else:
+            log("📊   %s: صفرُ نداءاتٍ في هذه الدفعة" % _CARD)
     if dropped:
         log("📊 ⚠ تجاوزت الدفعةُ %d عملة ولم يُنادَ check_position_reversals: "
             "أُسقطت %d عملة ⇒ هذا السطرُ يجمع دفعاتٍ لا دفعةً، ولا يُبنى "
@@ -314,6 +372,15 @@ def uninstall(mod=None):
             del cls._scan_one
         except AttributeError:           # pragma: no cover
             cls._scan_one = _ORIG["_scan_one"]
+    if _ORIG.get("card_on"):
+        owner = _ORIG["mod"] if _ORIG["card_on"] == "mod" else cls
+        if _ORIG["card_own"]:
+            setattr(owner, _CARD, _ORIG["card"])
+        else:
+            try:
+                delattr(owner, _CARD)
+            except AttributeError:           # pragma: no cover
+                setattr(owner, _CARD, _ORIG["card"])
     target = mod if mod is not None else _ORIG["mod"]
     target.check_position_reversals = _ORIG["cpr"]
     _ORIG.clear()
