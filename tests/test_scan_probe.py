@@ -41,12 +41,14 @@ class FakeExchange:
         self.calls = []
         self._gate = threading.Lock()
 
-    def fetch_ohlcv(self, symbol, timeframe="1h", limit=100):
+    def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=None):
+        """بصمةُ ccxt نفسُها — والترتيبُ مقصود: المِسبار يقرأ الحدَّ من
+        الموضع الرابع، فمُزيَّفٌ بترتيبٍ آخر يُخفي عطلاً حقيقيّاً."""
         with self._gate:
             if self.delay:
                 time.sleep(self.delay)
             self.calls.append((symbol, timeframe, limit))
-        return [[0, 1.0, 2.0, 0.5, 1.5, 10.0]] * min(limit, 5)
+        return [[0, 1.0, 2.0, 0.5, 1.5, 10.0]] * min(limit or 1, 5)
 
     def fetch_positions(self, **kw):
         if self.delay:
@@ -61,7 +63,7 @@ class _BaseScanner:
 
     def _scan_one(self, ticker):
         for _ in range(self.plan.get(ticker, 12)):
-            self.ex.fetch_ohlcv(ticker, "1h", 200)
+            self.ex.fetch_ohlcv(ticker, "1h", None, 200)
         return {"ticker": ticker}
 
 
@@ -76,7 +78,7 @@ def build(plan, delay=0.0, n_positions=0, own_scan=False, complete=True):
     def check_position_reversals():
         ex.fetch_positions(settleCoin="USDT")
         for _ in range(n_positions):
-            ex.fetch_ohlcv("POS/USDT", "4h", 260)
+            ex.fetch_ohlcv("POS/USDT", "4h", None, 260)
         return n_positions
 
     mod.check_position_reversals = check_position_reversals
@@ -163,7 +165,7 @@ n_rival = [0]
 
 def rival():
     while not stop.is_set():
-        mod.exchange.fetch_ohlcv("RIVAL/USDT", "1m", 50)
+        mod.exchange.fetch_ohlcv("RIVAL/USDT", "1m", None, 50)
         n_rival[0] += 1
 
 
@@ -302,7 +304,7 @@ mod = build(plan)
 
 class Boom(mod.TechnicalScanner):
     def _scan_one(self, ticker):
-        self.ex.fetch_ohlcv(ticker, "1h", 200)
+        self.ex.fetch_ohlcv(ticker, "1h", None, 200)
         raise RuntimeError("فشلٌ شبكيٌّ مُحاكى")
 
 
@@ -360,7 +362,7 @@ mod._mtf_card_fields = _mtf_card_fields
 
 class CardScanner(_BaseScanner):
     def _scan_one(self, ticker):
-        self.ex.fetch_ohlcv(ticker, "1h", 200)
+        self.ex.fetch_ohlcv(ticker, "1h", None, 200)
         mod._mtf_card_fields(ticker)              # داخل المسح
         return {"ticker": ticker}
 
@@ -491,7 +493,7 @@ mod = build(plan)
 
 class _Nest(mod.TechnicalScanner):
     def _scan_one(self, ticker):
-        self.ex.fetch_ohlcv(ticker, "1h", 200)
+        self.ex.fetch_ohlcv(ticker, "1h", None, 200)
         if ticker == "C00/USDT":
             type(self)._scan_one(self, "C09/USDT")
         return ticker
@@ -518,7 +520,7 @@ check("وتعيد نداءَ الانعكاس", mod.check_position_reversals is 
 mod = build(plan)
 
 
-def _own_fetch(symbol, timeframe="1h", limit=100):
+def _own_fetch(symbol, timeframe="1m", since=None, limit=None):
     return [[0, 1.0, 2.0, 0.5, 1.5, 10.0]]
 
 
@@ -534,6 +536,88 @@ scan_probe.install(mod, log=lines.append)
 mod.check_position_reversals()               # نداءُ انعكاسٍ بلا مسح
 check("دفعةٌ بصفرِ عملاتٍ لا تُخرج سطراً كاذباً",
       not any("إجمالاً" in L for L in lines), str(lines[1:]))
+scan_probe.uninstall(mod)
+
+# ── ⑭ فائضُ الأطر مقيساً — لا مَعدوداً على الشجرة ────────────────────────
+print("\n⑭ فائضُ الأطر — نمطُ BATCH_PROBE § ② الاثنا عشرَ نداءً بترتيبه")
+
+#: (سطر · إطار · حدّ) منقولةً حرفيّاً عن BATCH_PROBE § ② وبترتيبها
+TWELVE = [(1949, "4h", 800), (1967, "1h", 200),
+          (2062, "1h", 1000), (2062, "15m", 1000), (2062, "5m", 1000),
+          (2364, "15m", 300), (2364, "1h", 300), (2364, "1d", 300),
+          (2598, "1d", 120), (2600, "1h", 60), (2602, "15m", 60),
+          (2645, "15m", 200)]
+
+mod = build(plan)
+
+
+class _Twelve(_BaseScanner):
+    def _scan_one(self, ticker):
+        for _, tf, lim in TWELVE:
+            self.ex.fetch_ohlcv(ticker, tf, None, lim)
+        return ticker
+
+
+mod.TechnicalScanner = _Twelve
+lines = []
+scan_probe.install(mod, log=lines.append)
+mod.TechnicalScanner(mod.exchange, mod.plan)._scan_one("BTC/USDT")
+mod.check_position_reversals()
+tfl = field(lines, "الأطر:")
+check("اثنا عشرَ نداءً", "12 نداءً" in tfl, tfl)
+check("وخمسةُ أطرٍ متمايزة", "5 إطاراً متمايزاً" in tfl, tfl)
+# 1h تُجلَب بحدّ 200 قبل 1000، فالثانيةُ لا تُقتطَع من الأولى ⇒ ستٌّ لا سبع
+check("والفائضُ المُقتطَعُ ستٌّ لا سبع", "%d (50%%)" % 6 in tfl, tfl)
+check("ولا نداءَ غيرَ مبتوت", "غيرُ مبتوت" not in tfl, tfl)
+per = field(lines, "فائض")
+check("و15m أكثرُها فائضاً (ثلاثة)", "15m 4 (فائض 3)" in per, per)
+check("و1h فائضُها اثنان لا ثلاثة", "1h 4 (فائض 2)" in per, per)
+scan_probe.uninstall(mod)
+
+# حدٌّ مجهولٌ (limit=None) لا يُبَتّ فيه ولا يُحسَب فائضاً
+mod = build(plan)
+
+
+class _NoLimit(_BaseScanner):
+    def _scan_one(self, ticker):
+        self.ex.fetch_ohlcv(ticker, "1h", None, 500)
+        self.ex.fetch_ohlcv(ticker, "1h")          # حدٌّ مجهول
+        return ticker
+
+
+mod.TechnicalScanner = _NoLimit
+lines = []
+scan_probe.install(mod, log=lines.append)
+mod.TechnicalScanner(mod.exchange, mod.plan)._scan_one("BTC/USDT")
+mod.check_position_reversals()
+tfl = field(lines, "الأطر:")
+check("الحدُّ المجهولُ يُعلَن ولا يُبَتّ", "غيرُ مبتوتٍ 1" in tfl, tfl)
+check("ولا يُحسَب فائضاً", "(0%)" in tfl, tfl)
+scan_probe.uninstall(mod)
+
+# ── ⑮ حارسُ «نداءُ الانعكاس لم يُرَ» — يُحذِّر حيّاً لا بعد فواتِ الدفعة ──
+print("\n⑮ حارسُ نهاية الدفعة — يُحذِّر عند 200 عملةٍ بلا نداءِ انعكاس")
+mod = build(plan)
+lines = []
+scan_probe.install(mod, log=lines.append)
+sc = mod.TechnicalScanner(mod.exchange, mod.plan)
+for _ in range(19):                         # 190 عملة — دون العتبة
+    for t in tickers:
+        sc._scan_one(t)
+check("دون العتبةِ لا تحذير", not any("لم يُرَ نداءُ" in L for L in lines),
+      str(len(scan_probe._S["coins"])))
+for t in tickers:                           # 200 ⇒ العتبة
+    sc._scan_one(t)
+warn = field(lines, "لم يُرَ نداءُ")
+check("وعندها يُحذَّر حيّاً", bool(warn), "لا تحذير")
+check("ويسمّي السببين", "مرجعٍ مستورَد" in warn and "تُقطَع قبله" in warn, warn)
+check("ويقول إنّ التعريفَ لا يصحّ", "لا يصحّ هنا" in warn, warn)
+before = len([L for L in lines if "لم يُرَ نداءُ" in L])
+for t in tickers:
+    sc._scan_one(t)
+check("ولا يتكرّر التحذير",
+      len([L for L in lines if "لم يُرَ نداءُ" in L]) == before)
+mod.check_position_reversals()
 scan_probe.uninstall(mod)
 
 # ── الحصيلة ────────────────────────────────────────────────────────────

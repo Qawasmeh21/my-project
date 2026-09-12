@@ -60,6 +60,10 @@ _MARK = "__scan_probe_wrapper__"
 #: المشتبَهُ الثالث — يُلَفّ إن وُجد على الوحدة أو على الصنف.
 _CARD = "_mtf_card_fields"
 
+#: عندها يُحذَّر حيّاً أنّ نداءَ الانعكاس لم يُرَ — فلا يُنتظَر حتى يأتي.
+#: الدفعةُ أربعون عملة، فمئتان خمسُ دفعاتٍ بلا نهاية ⇒ لا لبسَ فيها.
+_WARN_COINS = 200
+
 #: سقفُ العملات المخزَّنة في دفعةٍ واحدة. يُتجاوَز فقط إن لم يُنادَ
 #: `check_position_reversals` — وحينها الحدودُ مشكوكٌ فيها أصلاً.
 _MAX_COINS = 500
@@ -77,7 +81,8 @@ def _reset(cold=False, seq=0):
               threads=set(), in_cpr=False, cpr_thread=None, dropped=0,
               card_n=0, card_s=0.0, card_in_n=0, card_in_s=0.0,
               card_gap_n=0, card_gap_s=0.0, card_oth_n=0, card_oth_s=0.0,
-              card_out_n=0, card_out_s=0.0)
+              card_out_n=0, card_out_s=0.0,
+              tf_n={}, tf_dup={}, tf_und=0, seen={}, warned=False)
 
 
 _reset(cold=True)
@@ -105,6 +110,20 @@ def _union(spans):
         elif e > ce:
             ce = e
     return total + (ce - cs)
+
+
+def _ohlcv_args(a, k):
+    """(رمز · إطار · حدّ) من وسائط ccxt: fetch_ohlcv(symbol, timeframe,
+    since, limit, params). يعيد أصفاراً صامتةً إن تغيّرت البصمة."""
+    try:
+        sym = a[0] if len(a) > 0 else k.get("symbol")
+        tf = a[1] if len(a) > 1 else k.get("timeframe")
+        lim = a[3] if len(a) > 3 else k.get("limit")
+        if not isinstance(lim, int):
+            lim = None
+        return sym, tf, lim
+    except Exception:                                        # noqa: BLE001
+        return None, None, None
 
 
 def installed():
@@ -188,6 +207,22 @@ def install(mod, log=None, strict=False):
                     if cur is not None:
                         cur[1] += 1
                         cur[2] += d
+                    # فائضُ § ٢‑أ مقيساً لا مَعدوداً على الشجرة: نداءٌ
+                    # يُقتطَع من خبيئةٍ مفتاحُها (رمز·إطار) إن سبقَه نداءٌ
+                    # لنفسهما بحدٍّ لا يقلّ عن حدِّه.
+                    sym, tf, lim = _ohlcv_args(a, k)
+                    if tf is not None:
+                        _S["tf_n"][tf] = _S["tf_n"].get(tf, 0) + 1
+                        key = (sym, tf)
+                        prev = _S["seen"].get(key, "ــ")
+                        if prev == "ــ":
+                            _S["seen"][key] = lim
+                        elif lim is None or prev is None:
+                            _S["tf_und"] += 1       # حدٌّ مجهول ⇒ لا يُبَتّ
+                        elif prev >= lim:
+                            _S["tf_dup"][tf] = _S["tf_dup"].get(tf, 0) + 1
+                        else:
+                            _S["seen"][key] = lim
                 else:
                     _S["other_n"] += 1
                     _S["other_s"] += d
@@ -212,6 +247,7 @@ def install(mod, log=None, strict=False):
             e = time.perf_counter()
             cur[3] = e - t
             _TL.cur = prev
+            warn = False
             with _LOCK:
                 _S["scan_s"] += cur[3]
                 if len(_S["coins"]) < _MAX_COINS:
@@ -219,6 +255,14 @@ def install(mod, log=None, strict=False):
                     _S["spans"].append((t, e))
                 else:
                     _S["dropped"] += 1
+                if len(_S["coins"]) >= _WARN_COINS and not _S["warned"]:
+                    _S["warned"] = warn = True
+            if warn:
+                log("📊 ⚠ مِسبار الدفعة: %d عملةً مُسحت ولم يُرَ نداءُ "
+                    "check_position_reversals بعد. فإمّا أنّه يُنادى "
+                    "بمرجعٍ مستورَدٍ لا يراه الترقيع، وإمّا أنّ الدورة "
+                    "تُقطَع قبله ⇒ **تعريفُ «نهاية الدفعة» لا يصحّ هنا، "
+                    "ولا سطرَ قياسٍ يُبنى عليه.**" % _WARN_COINS)
     setattr(_scan_one, _MARK, True)
     cls._scan_one = _scan_one
 
@@ -305,6 +349,9 @@ def _emit(rev_s, log):
         other_n, other_s = _S["other_n"], _S["other_s"]
         cold, seq, dropped = _S["cold"], _S["seq"], _S["dropped"]
         n_threads = len(_S["threads"])
+        tf_n = dict(_S["tf_n"])
+        tf_dup = dict(_S["tf_dup"])
+        tf_und = _S["tf_und"]
         card = (_S["card_n"], _S["card_s"], _S["card_in_n"], _S["card_in_s"],
                 _S["card_gap_n"], _S["card_gap_s"],
                 _S["card_oth_n"], _S["card_oth_s"],
@@ -345,6 +392,16 @@ def _emit(rev_s, log):
         % (early, full, sorted(c[3] for c in coins)[n // 2]))
     log("📊   أبطأُ خمس: " + " · ".join(
         "%s %.1f ث/%d نداء" % (c[0], c[3], c[1]) for c in slow))
+    if tf_n:
+        calls = sum(tf_n.values())
+        dup = sum(tf_dup.values())
+        log("📊   الأطر: %d نداءً · %d إطاراً متمايزاً · مُقتطَعٌ بخبيئة "
+            "(رمز·إطار) %d (%.0f%%)%s"
+            % (calls, len(tf_n), dup, 100.0 * dup / calls if calls else 0,
+               "" if not tf_und else " · غيرُ مبتوتٍ %d (حدٌّ مجهول)" % tf_und))
+        log("📊        " + " · ".join(
+            "%s %d (فائض %d)" % (tf, n, tf_dup.get(tf, 0))
+            for tf, n in sorted(tf_n.items(), key=lambda x: -x[1])[:6]))
     if _ORIG.get("card_on"):
         c_n, c_s, i_n, i_s, g_n, g_s, o_n, o_s, u_n, u_s = card
         if c_n:
