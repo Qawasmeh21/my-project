@@ -595,29 +595,64 @@ check("الحدُّ المجهولُ يُعلَن ولا يُبَتّ", "غير�
 check("ولا يُحسَب فائضاً", "(0%)" in tfl, tfl)
 scan_probe.uninstall(mod)
 
-# ── ⑮ حارسُ «نداءُ الانعكاس لم يُرَ» — يُحذِّر حيّاً لا بعد فواتِ الدفعة ──
-print("\n⑮ حارسُ نهاية الدفعة — يُحذِّر عند 200 عملةٍ بلا نداءِ انعكاس")
+# ── ⑮ حارسُ نهاية الدفعة — عتبةٌ تُعاير نفسَها لا رقمٌ مختار ─────────
+print("\n⑮ حارسُ نهاية الدفعة — ثلاثةُ مساراتٍ للعتبة")
+
+# ⑮-أ قبل أيّ دفعةٍ مكتملة: العتبةُ 300 = ثلاثُ دفعاتٍ عند سقف الكون 100
 mod = build(plan)
 lines = []
 scan_probe.install(mod, log=lines.append)
+check("العتبةُ قبل المعايرة 300", scan_probe._warn_at() == 300,
+      str(scan_probe._warn_at()))
 sc = mod.TechnicalScanner(mod.exchange, mod.plan)
-for _ in range(19):                         # 190 عملة — دون العتبة
+for _ in range(29):                          # 290 — دون العتبة
     for t in tickers:
         sc._scan_one(t)
-check("دون العتبةِ لا تحذير", not any("لم يُرَ نداءُ" in L for L in lines),
+check("ودون 300 لا تحذير", not any("لم يُرَ نداءُ" in L for L in lines),
       str(len(scan_probe._S["coins"])))
-for t in tickers:                           # 200 ⇒ العتبة
+for t in tickers:                            # 300
     sc._scan_one(t)
 warn = field(lines, "لم يُرَ نداءُ")
-check("وعندها يُحذَّر حيّاً", bool(warn), "لا تحذير")
+check("وعند 300 يُحذَّر", bool(warn), "لا تحذير")
+check("ويقول إنّها قبل أيّ دفعةٍ مكتملة", "قبل أيّ دفعةٍ مكتملة" in warn, warn)
 check("ويسمّي السببين", "مرجعٍ مستورَد" in warn and "تُقطَع قبله" in warn, warn)
-check("ويقول إنّ التعريفَ لا يصحّ", "لا يصحّ هنا" in warn, warn)
 before = len([L for L in lines if "لم يُرَ نداءُ" in L])
 for t in tickers:
     sc._scan_one(t)
-check("ولا يتكرّر التحذير",
-      len([L for L in lines if "لم يُرَ نداءُ" in L]) == before)
-mod.check_position_reversals()
+check("ولا يتكرّر", len([L for L in lines if "لم يُرَ نداءُ" in L]) == before)
+scan_probe.uninstall(mod)
+
+# ⑮-ب بعد دفعةٍ مقيسةٍ بعشرِ عملات: العتبةُ max(3×10, 60) = 60
+mod = build(plan)
+lines = []
+scan_probe.install(mod, log=lines.append)
+batch(mod, tickers)                          # دفعةٌ مكتملةٌ بعشرٍ ⇒ تُعايَر
+check("عُوِّيرت من الدفعة", scan_probe._ORIG["batch_n"] == 10,
+      str(scan_probe._ORIG.get("batch_n")))
+check("والعتبةُ صارت 60 (الحدُّ الأدنى)", scan_probe._warn_at() == 60,
+      str(scan_probe._warn_at()))
+sc = mod.TechnicalScanner(mod.exchange, mod.plan)
+for _ in range(6):
+    for t in tickers:
+        sc._scan_one(t)
+warn = field(lines, "لم يُرَ نداءُ")
+check("ويُحذَّر عندها", bool(warn), "لا تحذير")
+check("ويذكر أنّها من دفعةٍ مقيسة", "دفعةٍ مقيسةٍ بـ10 عملة" in warn, warn)
+scan_probe.uninstall(mod)
+
+# ⑮-ج وطلبُ المستخدم يسبق المعايرة
+mod = build(plan)
+lines = []
+scan_probe.install(mod, log=lines.append, warn_coins=25)
+check("العتبةُ المطلوبةُ تسبق", scan_probe._warn_at() == 25,
+      str(scan_probe._warn_at()))
+sc = mod.TechnicalScanner(mod.exchange, mod.plan)
+for _ in range(3):
+    for t in tickers:
+        sc._scan_one(t)
+warn = field(lines, "لم يُرَ نداءُ")
+check("ويُحذَّر عند 25", bool(warn) and "العتبة 25" in warn, warn)
+check("وينسبها لطلبك", "طلبُك" in warn, warn)
 scan_probe.uninstall(mod)
 
 # ── الحصيلة ────────────────────────────────────────────────────────────

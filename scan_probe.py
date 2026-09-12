@@ -60,9 +60,15 @@ _MARK = "__scan_probe_wrapper__"
 #: المشتبَهُ الثالث — يُلَفّ إن وُجد على الوحدة أو على الصنف.
 _CARD = "_mtf_card_fields"
 
-#: عندها يُحذَّر حيّاً أنّ نداءَ الانعكاس لم يُرَ — فلا يُنتظَر حتى يأتي.
-#: الدفعةُ أربعون عملة، فمئتان خمسُ دفعاتٍ بلا نهاية ⇒ لا لبسَ فيها.
-_WARN_COINS = 200
+#: عتبةُ التحذير **قبل** أن تكتمل دفعةٌ واحدة — فحجمُ الدفعة مجهولٌ
+#: حينها. وسجلُّ المستخدم يقول «فُحصت دفعة 40 عملة (40/100)» ⇒ الكونُ
+#: مئة، فلا دفعةَ تتجاوزها. وثلاثُ مئةٍ = ثلاثُ دفعاتٍ عند سقف الكون،
+#: فلا تُطلَق داخل دفعةٍ مشروعةٍ ولو مسحت الكونَ كلَّه.
+#: وبعد أوّل دفعةٍ مكتملة **تُعاير العتبةُ نفسَها** ⇒ ‎_warn_at()‎.
+_WARN_COINS = 300
+
+#: حدٌّ أدنى للعتبة المعايَرة — حتى لا تُطلَق على دفعةٍ صغيرةٍ شاذّة.
+_WARN_FLOOR = 60
 
 #: سقفُ العملات المخزَّنة في دفعةٍ واحدة. يُتجاوَز فقط إن لم يُنادَ
 #: `check_position_reversals` — وحينها الحدودُ مشكوكٌ فيها أصلاً.
@@ -112,6 +118,18 @@ def _union(spans):
     return total + (ce - cs)
 
 
+def _warn_at():
+    """العتبةُ السارية: ما طلبه المستخدم · أو ثلاثةُ أضعافِ أوّلِ دفعةٍ
+    مكتملة · أو _WARN_COINS قبل أن تكتمل واحدة."""
+    want = _ORIG.get("warn_coins")
+    if want:
+        return want
+    n = _ORIG.get("batch_n")
+    if n:
+        return max(3 * n, _WARN_FLOOR)
+    return _WARN_COINS
+
+
 def _ohlcv_args(a, k):
     """(رمز · إطار · حدّ) من وسائط ccxt: fetch_ohlcv(symbol, timeframe,
     since, limit, params). يعيد أصفاراً صامتةً إن تغيّرت البصمة."""
@@ -131,11 +149,13 @@ def installed():
     return bool(_ORIG)
 
 
-def install(mod, log=None, strict=False):
+def install(mod, log=None, strict=False, warn_coins=None):
     """يُركّب المِسبار على وحدةِ البوت. يعيد True إن رُكِّب.
 
     ولا يرفع استثناءً افتراضيّاً: يُعلِن السببَ ويُرجع False — إلّا مع
     `strict=True`.
+
+    و`warn_coins` يثبّت عتبةَ حارسِ «نهاية الدفعة» بدل معايرتها ذاتيّاً.
     """
     if log is None:
         def log(m):
@@ -180,6 +200,8 @@ def install(mod, log=None, strict=False):
     # هل الصفةُ مملوكةٌ للكائن/الصنف أم موروثة — لتعودَ الإزالةُ نظيفةً
     _ORIG["ex"] = ex
     _ORIG["cls"] = cls
+    _ORIG["warn_coins"] = warn_coins
+    _ORIG["batch_n"] = None
     _ORIG["fetch_ohlcv"] = orig_fetch
     _ORIG["_scan_one"] = orig_scan
     _ORIG["cpr"] = cpr
@@ -255,14 +277,21 @@ def install(mod, log=None, strict=False):
                     _S["spans"].append((t, e))
                 else:
                     _S["dropped"] += 1
-                if len(_S["coins"]) >= _WARN_COINS and not _S["warned"]:
+                at = _warn_at()
+                if len(_S["coins"]) >= at and not _S["warned"]:
                     _S["warned"] = warn = True
             if warn:
+                b_n = _ORIG.get("batch_n")
                 log("📊 ⚠ مِسبار الدفعة: %d عملةً مُسحت ولم يُرَ نداءُ "
-                    "check_position_reversals بعد. فإمّا أنّه يُنادى "
-                    "بمرجعٍ مستورَدٍ لا يراه الترقيع، وإمّا أنّ الدورة "
-                    "تُقطَع قبله ⇒ **تعريفُ «نهاية الدفعة» لا يصحّ هنا، "
-                    "ولا سطرَ قياسٍ يُبنى عليه.**" % _WARN_COINS)
+                    "check_position_reversals بعد (العتبة %d — %s). فإمّا "
+                    "أنّه يُنادى بمرجعٍ مستورَدٍ لا يراه الترقيع، وإمّا أنّ "
+                    "الدورة تُقطَع قبله ⇒ **تعريفُ «نهاية الدفعة» لا يصحّ "
+                    "هنا، ولا سطرَ قياسٍ يُبنى عليه.**"
+                    % (at, at,
+                       "طلبُك" if _ORIG.get("warn_coins") else
+                       ("ثلاثةُ أضعافِ دفعةٍ مقيسةٍ بـ%d عملة" % b_n) if b_n
+                       else "قبل أيّ دفعةٍ مكتملة — ثلاثُ دفعاتٍ عند سقف "
+                            "الكون 100"))
     setattr(_scan_one, _MARK, True)
     cls._scan_one = _scan_one
 
@@ -359,6 +388,8 @@ def _emit(rev_s, log):
         _reset(cold=False, seq=seq + 1)
 
     n = len(coins)
+    if not dropped:                       # دفعةٌ سليمةٌ ⇒ يُعايَر عليها
+        _ORIG["batch_n"] = n
     wall = _union(spans)                  # زمنُ الجدار المشغولُ بالمسح
     cpu = scan_s - fetch_s                # داخل _scan_one وليس شبكة
     gap = total - wall - rev_s            # بين الدالّتين

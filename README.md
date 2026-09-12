@@ -18,14 +18,14 @@ import scan_probe; scan_probe.install(sys.modules[__name__])
 ## الفحوص — قبل التركيب
 
 ```bash
-python tests/test_scan_probe.py        # 87/87 · ثوانٍ · لا شبكةَ ولا بوت
+python tests/test_scan_probe.py        # 95/95 · ثوانٍ · لا شبكةَ ولا بوت
 ```
 
 ## المحتوى
 
 ```
 scan_probe.py                      المِسبار
-tests/test_scan_probe.py           87 فحصاً · على 3.10→3.13
+tests/test_scan_probe.py           95 فحصاً · على 3.10→3.13
 docs/PROBE_AUDIT_2026-09-12.md     مراجعةُ المِسبار — أربعةُ أعطالٍ مقيسةٌ وعلاجُها
 docs/BATCH_PROBE_2026-09-12.md     التحليلُ البنيويُّ لدفعة 49.6 دقيقة (كما وُرد)
 docs/HANDOFF_2026-09-11.md         تسليمُ الجلسة السابقة (كما وُرد)
