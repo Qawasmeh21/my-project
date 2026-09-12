@@ -76,7 +76,8 @@ def _reset(cold=False, seq=0):
               fetch_n=0, fetch_s=0.0, other_n=0, other_s=0.0,
               threads=set(), in_cpr=False, cpr_thread=None, dropped=0,
               card_n=0, card_s=0.0, card_in_n=0, card_in_s=0.0,
-              card_gap_n=0, card_gap_s=0.0, card_oth_n=0, card_oth_s=0.0)
+              card_gap_n=0, card_gap_s=0.0, card_oth_n=0, card_oth_s=0.0,
+              card_out_n=0, card_out_s=0.0)
 
 
 _reset(cold=True)
@@ -273,7 +274,10 @@ def install(mod, log=None, strict=False):
                 with _LOCK:
                     _S["card_n"] += 1
                     _S["card_s"] += d
-                    if ident not in _S["threads"]:
+                    if _S["t0"] is None:
+                        _S["card_out_n"] += 1      # لا دفعةَ جارية
+                        _S["card_out_s"] += d
+                    elif ident not in _S["threads"]:
                         _S["card_oth_n"] += 1      # خيطُ لوحةٍ أو مراقب
                         _S["card_oth_s"] += d
                     elif in_scan:
@@ -303,7 +307,8 @@ def _emit(rev_s, log):
         n_threads = len(_S["threads"])
         card = (_S["card_n"], _S["card_s"], _S["card_in_n"], _S["card_in_s"],
                 _S["card_gap_n"], _S["card_gap_s"],
-                _S["card_oth_n"], _S["card_oth_s"])
+                _S["card_oth_n"], _S["card_oth_s"],
+                _S["card_out_n"], _S["card_out_s"])
         _reset(cold=False, seq=seq + 1)
 
     n = len(coins)
@@ -319,11 +324,16 @@ def _emit(rev_s, log):
     log("📊 مِسبار الدفعة #%d%s: %s إجمالاً · %d عملة · خيوطُ مسحٍ %d"
         % (seq + 1, " **[باردة — الأولى بعد الإقلاع]**" if cold else "",
            _fmt(total), n, n_threads))
-    log("📊   _scan_one %s (%.0f%%) = شبكة %s (%d نداء) + حساب %s%s"
+    # الجدارُ (اتّحادُ المُدد) ومجاميعُ الخيوط كمّيّتان مختلفتان — ولا
+    # يُجمَعان في معادلةٍ واحدة، فبخيوطٍ متوازيةٍ يصير «جدار = شبكة + حساب»
+    # كذباً حسابيّاً. فالجدارُ سطرٌ، وتفكيكُ المجموع سطرٌ يقول إنّه مجموع.
+    log("📊   _scan_one جداراً %s (%.0f%% من الدفعة)%s"
         % (_fmt(wall), 100.0 * wall / total if total else 0,
-           _fmt(fetch_s), fetch_n, _fmt(cpu),
            "" if par < 1.05 else
-           "  ⟨مجموعُ الخيوط %s ⇒ تواشٍ ×%.1f⟩" % (_fmt(scan_s), par)))
+           " · مجموعُ الخيوط %s ⇒ تواشٍ ×%.1f" % (_fmt(scan_s), par)))
+    log("📊        ومنه شبكة %s (%d نداء) + حساب %s%s"
+        % (_fmt(fetch_s), fetch_n, _fmt(cpu),
+           "" if par < 1.05 else "  — مجاميعُ خيوطٍ لا زمنَ جدار"))
     log("📊   check_position_reversals %s · وما بين الدالّتين %s"
         % (_fmt(rev_s), _fmt(gap)))
     log("📊   وخيوطٌ أخرى مسّت نفسَ الكائن أثناء الدفعة: %d نداءً · %s "
@@ -336,12 +346,12 @@ def _emit(rev_s, log):
     log("📊   أبطأُ خمس: " + " · ".join(
         "%s %.1f ث/%d نداء" % (c[0], c[3], c[1]) for c in slow))
     if _ORIG.get("card_on"):
-        c_n, c_s, i_n, i_s, g_n, g_s, o_n, o_s = card
+        c_n, c_s, i_n, i_s, g_n, g_s, o_n, o_s, u_n, u_s = card
         if c_n:
             log("📊   %s %d نداءً · %s = داخل المسح %d (%s) + بين الدالّتين "
-                "%d (%s) + خيوطٌ أخرى %d (%s)"
+                "%d (%s) + خيوطٌ أخرى %d (%s) + خارج الدفعة %d (%s)"
                 % (_CARD, c_n, _fmt(c_s), i_n, _fmt(i_s), g_n, _fmt(g_s),
-                   o_n, _fmt(o_s)))
+                   o_n, _fmt(o_s), u_n, _fmt(u_s)))
         else:
             log("📊   %s: صفرُ نداءاتٍ في هذه الدفعة" % _CARD)
     if dropped:

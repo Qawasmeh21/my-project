@@ -143,7 +143,7 @@ lines = []
 scan_probe.install(mod, log=lines.append)
 batch(mod, tickers)
 srt = field(lines, "خرجت مبكّراً")
-net = field(lines, "_scan_one")
+net = field(lines, "ومنه شبكة")
 check("خمسٌ مبكّرة وخمسٌ كاملة",
       "(≤2 نداء) 5" in srt and "(≥10) 5" in srt, srt)
 check("نداءاتُ السكانر 70 بلا نداءات الانعكاس",
@@ -172,8 +172,8 @@ th.start()
 batch(mod, tickers)
 stop.set()
 th.join(timeout=5)
-oth = field(lines, "خيوطٌ أخرى")
-net = field(lines, "_scan_one")
+oth = field(lines, "خيوطٌ أخرى مسّت")
+net = field(lines, "ومنه شبكة")
 rn = int(oth.split("الدفعة:")[1].split("نداءً")[0].strip())
 check("الخيطُ المنافس مرصود", rn > 0, oth)
 check("ولا يُخلَط بنداءات السكانر", "(70 نداء)" in net, net)
@@ -187,18 +187,20 @@ mod = build(plan, delay=0.001)
 lines = []
 scan_probe.install(mod, log=lines.append)
 batch(mod, tickers, workers=4)
-head, net = field(lines, "إجمالاً"), field(lines, "_scan_one")
-oth, srt = field(lines, "خيوطٌ أخرى"), field(lines, "خرجت مبكّراً")
+head = field(lines, "إجمالاً")
+wal, net = field(lines, "_scan_one جداراً"), field(lines, "ومنه شبكة")
+oth, srt = field(lines, "خيوطٌ أخرى مسّت"), field(lines, "خرجت مبكّراً")
 rev = field(lines, "check_position_reversals")
-pct = int(net.split("(")[1].split("%")[0])
+pct = int(wal.split("(")[1].split("%")[0])
 rn = int(oth.split("الدفعة:")[1].split("نداءً")[0].strip())
 check("كلُّ النداءات تُنسَب للسكانر", "(70 نداء)" in net, net)
 check("وصفرٌ يُنسَب لخيوطٍ غريبة", rn == 0, oth)
 check("الفرزُ يبقى 5 و5",
       "(≤2 نداء) 5" in srt and "(≥10) 5" in srt, srt)
-check("لا نسبةَ فوق 100%", pct <= 100, net)
+check("لا نسبةَ فوق 100%", pct <= 100, wal)
 check("ولا فجوةٌ سالبة", "-" not in rev.split("الدالّتين")[1], rev)
-check("والتواشي مُعلَن", "تواشٍ" in net, net)
+check("والتواشي مُعلَن", "تواشٍ" in wal, wal)
+check("والمجاميعُ مُعلَنةٌ أنّها مجاميع", "مجاميعُ خيوطٍ" in net, net)
 check("وعددُ خيوط المسح مذكور", "خيوطُ مسحٍ 4" in head, head)
 scan_probe.uninstall(mod)
 
@@ -407,6 +409,132 @@ check("ولا سطرَ بطاقةٍ في الإخراج",
               and "لم أجد" not in L))
 scan_probe.uninstall(mod)
 check("ولا صفةَ بطاقةٍ مخلَّفة", not hasattr(mod, "_mtf_card_fields"))
+
+# ── ⑬ حالاتٌ حدّيّة — من مراجعةٍ خصِمةٍ للمِسبار نفسِه ───────────────────
+print("\n⑬ حالاتٌ حدّيّة — وكلُّ واحدةٍ أسقطت شيئاً قبل إصلاحه")
+
+# ⑬-أ المعادلةُ لا تكذب: الجدارُ سطرٌ والمجاميعُ سطرٌ يقول إنّه مجموع
+mod = build({t: 3 for t in tickers}, delay=0.002)
+lines = []
+scan_probe.install(mod, log=lines.append)
+batch(mod, tickers, workers=6)
+wal, net = field(lines, "_scan_one جداراً"), field(lines, "ومنه شبكة")
+wall_pct = int(wal.split("(")[1].split("%")[0])
+check("الجدارُ لا يتجاوز الدفعة", wall_pct <= 100, wal)
+check("ولا يدّعي أنّ الجدارَ = شبكة + حساب", "=" not in wal, wal)
+check("والمجاميعُ موسومةٌ بأنّها مجاميع", "مجاميعُ خيوطٍ" in net, net)
+scan_probe.uninstall(mod)
+
+# ⑬-ب بطاقةٌ خارج الدفعة لا تُنسَب إلى «خيوطٍ أخرى»
+mod = build(plan)
+mod._mtf_card_fields = lambda t: t
+lines = []
+scan_probe.install(mod, log=lines.append)
+mod._mtf_card_fields("C00/USDT")            # قبل أوّل مسح ⇒ خارج الدفعة
+batch(mod, tickers)
+cl = field(lines, "_mtf_card_fields ")
+check("تُعَدّ خارجَ الدفعة", "خارج الدفعة 1" in cl, cl)
+check("ولا تُنسَب لخيوطٍ أخرى", "خيوطٌ أخرى 0" in cl, cl)
+scan_probe.uninstall(mod)
+
+# ⑬-ج استثناءٌ في نداء الانعكاس: يمرّ · والسطرُ يُخرَج · والحالةُ تُصفَّر
+mod = build(plan)
+_ok_cpr = mod.check_position_reversals
+
+
+def _boom_cpr():
+    _ok_cpr()
+    raise RuntimeError("انفجارُ الانعكاس")
+
+
+mod.check_position_reversals = _boom_cpr
+lines = []
+scan_probe.install(mod, log=lines.append)
+sc = mod.TechnicalScanner(mod.exchange, mod.plan)
+for t in tickers:
+    sc._scan_one(t)
+raised = False
+try:
+    mod.check_position_reversals()
+except RuntimeError:
+    raised = True
+check("الاستثناءُ يمرّ إلى البوت كما هو", raised)
+check("والسطرُ يُخرَج رغمه", any("إجمالاً" in L for L in lines))
+check("والحالةُ صُفِّرت", scan_probe._S["t0"] is None
+      and not scan_probe._S["coins"])
+scan_probe.uninstall(mod)
+
+# ⑬-د دالّةُ السجلّ تفشل — لا تتسرّب الحالة ولا ينفجر البوت
+mod = build(plan)
+seen = []
+
+
+def _bad_log(m):
+    seen.append(m)
+    if "إجمالاً" in m:
+        raise IOError("القرصُ ممتلئ")
+
+
+scan_probe.install(mod, log=_bad_log)
+sc = mod.TechnicalScanner(mod.exchange, mod.plan)
+for t in tickers:
+    sc._scan_one(t)
+mod.check_position_reversals()               # لا يرفع
+check("فشلُ السجلّ لا يصل البوت", True)
+check("والحالةُ صُفِّرت رغمه", scan_probe._S["t0"] is None
+      and not scan_probe._S["coins"])
+scan_probe.uninstall(mod)
+
+# ⑬-هـ _scan_one متداخلةٌ مع نفسها — العملةُ الجارية تعود لأبيها
+mod = build(plan)
+
+
+class _Nest(mod.TechnicalScanner):
+    def _scan_one(self, ticker):
+        self.ex.fetch_ohlcv(ticker, "1h", 200)
+        if ticker == "C00/USDT":
+            type(self)._scan_one(self, "C09/USDT")
+        return ticker
+
+
+mod.TechnicalScanner = _Nest
+lines = []
+scan_probe.install(mod, log=lines.append)
+mod.TechnicalScanner(mod.exchange, mod.plan)._scan_one("C00/USDT")
+check("لا عملةَ معلَّقةٌ بعد التداخل",
+      getattr(scan_probe._TL, "cur", None) is None)
+mod.check_position_reversals()
+check("وعُدَّت عملتان", "2 عملة" in field(lines, "إجمالاً"),
+      field(lines, "إجمالاً"))
+scan_probe.uninstall(mod)
+
+# ⑬-و الإزالةُ بلا وسيط · وصفةٌ مملوكةٌ على الكائن · ودفعةٌ بصفرِ عملات
+mod = build(plan)
+pre_cpr = mod.check_position_reversals
+scan_probe.install(mod, log=lambda m: None)
+check("uninstall() بلا وسيطٍ تعمل", scan_probe.uninstall() is True)
+check("وتعيد نداءَ الانعكاس", mod.check_position_reversals is pre_cpr)
+
+mod = build(plan)
+
+
+def _own_fetch(symbol, timeframe="1h", limit=100):
+    return [[0, 1.0, 2.0, 0.5, 1.5, 10.0]]
+
+
+mod.exchange.fetch_ohlcv = _own_fetch        # صفةٌ مملوكةٌ لا موروثة
+scan_probe.install(mod, log=lambda m: None)
+scan_probe.uninstall(mod)
+check("الصفةُ المملوكةُ تعود هي نفسُها",
+      mod.exchange.fetch_ohlcv is _own_fetch)
+
+mod = build(plan)
+lines = []
+scan_probe.install(mod, log=lines.append)
+mod.check_position_reversals()               # نداءُ انعكاسٍ بلا مسح
+check("دفعةٌ بصفرِ عملاتٍ لا تُخرج سطراً كاذباً",
+      not any("إجمالاً" in L for L in lines), str(lines[1:]))
+scan_probe.uninstall(mod)
 
 # ── الحصيلة ────────────────────────────────────────────────────────────
 print("\n" + "=" * 66)
